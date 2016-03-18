@@ -37,8 +37,7 @@ def load_data(dataset, train_path):
             for k, s in enumerate(sents):
                 wds = s.split(' ')
                 d = [w2idx[wd] for wd in wds]
-                if len(d) < max_sent_len[k]:
-                    d.extend([1] * (max_sent_len[k] - len(d)))
+                d.extend([1] * (max_sent_len[k] + 1 - len(d)))  # add EOS
                 data[k].append(d)
     return w2idx, np.array(data[0], dtype=np.int32), \
            np.array(data[1], dtype=np.int32)
