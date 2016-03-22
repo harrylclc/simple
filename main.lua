@@ -1,173 +1,130 @@
 require 'hdf5'
-require 'rnn'
 require 'optim'
 
 cmd = torch.CmdLine()
 cmd:option('-data', '/data_giles/cul226/simple/preprocessed/newsla_Google.hdf5', 'training data and word2vec data')
 cmd:option('-gpu', 0, 'use gpu')
 cmd:option('-gpuid', 1, 'gpu id')
-
-function load_data()
-    local w2v
-    local dataX, dataY
-    print('loading data...')
-    local f = hdf5.open(opt.data, 'r')
-    w2v = f:read('w2v'):all()
-    dataX = f:read('data_x'):all()
-    dataY = f:read('data_y'):all()
-    print('done')
-    return dataX, dataY, w2v
-end
-
---[[ Forward coupling: Copy encoder cell and output to decoder LSTM ]]--
-function forwardConnect(encLSTM, decLSTM)
-   decLSTM.userPrevOutput = nn.rnn.recursiveCopy(decLSTM.userPrevOutput, encLSTM.outputs[opt.seqLen])
-   decLSTM.userPrevCell = nn.rnn.recursiveCopy(decLSTM.userPrevCell, encLSTM.cells[opt.seqLen])
-end
-
---[[ Backward coupling: Copy decoder gradients to encoder LSTM ]]--
-function backwardConnect(encLSTM, decLSTM)
-   encLSTM.userNextGradCell = nn.rnn.recursiveCopy(encLSTM.userNextGradCell, decLSTM.userGradPrevCell)
-   encLSTM.gradPrevOutput = nn.rnn.recursiveCopy(encLSTM.gradPrevOutput, decLSTM.userGradPrevOutput)
-end
-
+cmd:option('-save_every', 3000, 'save model every # iterations')
+cmd:option('-checkpoint_dir', '/data_giles/cul226/simple/models', 'checkpoint dir')
+cmd:option('-savefile','enc-dec','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
+cmd:option('-print_every', 1, 'print every # iterations')
+cmd:option('-epochs', 1, 'number of epochs')
+cmd:option('-batchSize', 8, 'batch size')
+cmd:option('-learningRate', 0.001, 'learning rate')
+cmd:option('-momentum', 0.9, 'momentum')
+cmd:option('-threads', 4 , 'number of threads')
+cmd:option('-init_from', '', 'init from checkpoint model')
 
 -- options
 opt = cmd:parse(arg)
-opt.batchSize = 32
-opt.niter = 1
-opt.learningRate = 0.001
-opt.momentum = 0.9
 
 if opt.gpu == 1 then
     require 'cutorch'
     cutorch.setDevice(opt.gpuid + 1)
     require 'cunn'
     require 'cudnn'
+else
+    torch.setnumthreads(opt.threads)
+    print('<torch> set # threads to ' .. torch.getnumthreads())
 end
 
-local w2v
-local dataX, dataY
-dataX, dataY, w2v = load_data()
+local DL = require 'DataLoader'
+local loader = DL.create(opt.data, opt.batchSize)
 
-opt.vocabSize = w2v:size(1)
-opt.vecSize = w2v:size(2)
-opt.seqLen = dataX:size(2)
+local EncDec = require 'EncoderDecoder'
+local encoderDecoder
 
--- reverse input sequences
-local dataXRev = torch.Tensor(dataX:size())
-for i = 1, dataX:size(2) do
-    dataXRev:select(2, i):copy(dataX:select(2, dataX:size(2) + 1 - i))
+if string.len(opt.init_from) > 0 then
+    print('init model from', opt.init_from)
+    local checkpoint = torch.load(opt.init_from)
+    encoderDecoder = checkpoint.encoderDecoder
+    setmetatable(encoderDecoder, EncDec)
+else
+    encoderDecoder = EncDec.create(loader.w2v)
 end
 
--- shift output sequences
-local dataYShift = torch.cat(dataY:select(2, dataY:size(2)), dataY:sub(1, -1, 1, -2), 2)
 
-if opt.gpu == 1 then
-    dataY = dataY:float():cuda()
-    dataXRev = dataXRev:float():cuda()
-    dataYShitf = dataYShift:float():cuda()
-end
-
--- pre-trained w2v
-local lookup = nn.LookupTable(opt.vocabSize, opt.vecSize)
--- w2v = w2v:cuda()
-lookup.weight:copy(w2v)
-lookup.weight[1]:zero()
-
--- encoder
-local enc = nn.Sequential()
-enc:add(lookup)
-enc:add(nn.SplitTable(1, 2))
-local encLSTM = nn.LSTM(opt.vecSize, opt.vecSize)
-enc:add(nn.Sequencer(encLSTM))
-enc:add(nn.SelectTable(-1))
-
--- decoder
-local dec = nn.Sequential()
-dec:add(lookup)
-dec:add(nn.SplitTable(1, 2))
-local decLSTM = nn.LSTM(opt.vecSize, opt.vecSize)
-dec:add(nn.Sequencer(decLSTM))
-dec:add(nn.Sequencer(nn.Linear(opt.vecSize, opt.vocabSize)))
-dec:add(nn.Sequencer(nn.LogSoftMax()))
-
-local model = nn.Container():add(enc):add(dec)
+local model = encoderDecoder.model
 local criterion = nn.SequencerCriterion(nn.ClassNLLCriterion())
 
-params, gradParams = model:getParameters()
-
--- training
-local trainSize = dataX:size(1)
-local numBatches = math.floor(trainSize / opt.batchSize)
-
-sgdState = {
+local sgdState = {
     learningRate = opt.learningRate,
     momentum = opt.momentum,
     learningRateDecay = 5e-7
 }
 
 local toTable = nn.SplitTable(1, 1)
-local zeroTensor = torch.Tensor(opt.batchSize, opt.vecSize):zero()
 
 if opt.gpu == 1 then
     model:cuda()
     criterion:cuda()
     toTable:cuda()
-    zeroTensor = zeroTensor:cuda()
 end
 
-for i = 1, opt.niter do
-    print('Iter: ' .. i)
-    local shuffle = torch.randperm(numBatches)
-    for j = 1, shuffle:size(1) do
-        print(j)
-        local st = (shuffle[j] - 1) * opt.batchSize + 1
-        local batchSize = math.min(opt.batchSize, trainSize - st + 1)
-        print('start:', st, 'batchSize', batchSize)
-        print('before narrow')
-        local encInSeq = dataXRev:narrow(1, st, batchSize)
-        local decInSeq = dataYShift:narrow(1, st, batchSize)
-        local decOutSeq = dataY:narrow(1, st, batchSize)
-        print('after narrow')
-        --if opt.gpu == 1 then
-        --    encInSeq = torch.Tensor(batchSize, encInSeq:size(2)):copy(encInSeq):float():cuda()
-        --    decInSeq = decInSeq:float():cuda()
-        --    decOutSeq = decOutSeq:float():cuda()
-        --end
-        print('before totable')
-        decOutSeq = toTable:forward(decOutSeq)
-        print('after totable')
+params, gradParams = model:getParameters()
 
-        local feval = function(x)
-            print('before gc')
-            collectgarbage()
-            print('after gc')
-            if x ~= params then
-                params:copy(x)
-            end
+local iterations = opt.epochs * loader.numBatches
+local iterationsPerEpoch = loader.numBatches
 
-            gradParams:zero()
-            print('forward ...')
-            -- forward
-            local encOut = enc:forward(encInSeq)
-            forwardConnect(encLSTM, decLSTM)
-            local decOut = dec:forward(decInSeq)
-            print('forward done')
+trainLosses = {}
+for i = 1, iterations do
+    model:training()
+    local epoch = i / loader.numBatches
+    local timer = torch.Timer()
 
-            local err = criterion:forward(decOut, decOutSeq)
-            print(string.format("NLL err = %f ", err))
+    local encInSeq, decInSeq, decOutSeq = loader:nextBatch()
+    if opt.gpu == 1 then
+        encInSeq = encInSeq:cuda()
+        decInSeq = decInSeq:cuda()
+        decOutSeq = decOutSeq:cuda()
+    end
+    decOutSeq = toTable:forward(decOutSeq)
 
-            -- backward
-            local gradOutput = criterion:backward(decOut, decOutSeq)
-            dec:backward(decInSeq, gradOutput)
-            backwardConnect(encLSTM, decLSTM)
-            enc:backward(encInSeq, zeroTensor)
-
-            return err, gradParams
+    local feval = function(x)
+        if x ~= params then
+            params:copy(x)
         end
 
-        optim.sgd(feval, params, sgdState)
+        gradParams:zero()
+        -- forward
+        local decOut = encoderDecoder:forward(encInSeq, decInSeq)
+
+        local err = criterion:forward(decOut, decOutSeq)
+        -- print(string.format("NLL err = %f ", err))
+
+        -- backward
+        local gradOutput = criterion:backward(decOut, decOutSeq)
+        encoderDecoder:backward(encInSeq, decInSeq, gradOutput)
+
+        return err, gradParams
     end
+
+    local _, loss = optim.sgd(feval, params, sgdState)
+    local time = timer:time().real
+    local trainLoss = loss[1]
+    trainLosses[i] = trainLoss
+
+    if i % opt.save_every == 0 or i % loader.numBatches == 0 or i == iterations then
+        local savefile = string.format('%s/%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, trainLoss)
+        print('iter ', i, 'save checkpoint', savefile)
+        local checkpoint = {}
+        checkpoint.encoderDecoder = encoderDecoder
+        checkpoint.opt = opt
+        checkpoint.trainLosses = trainLosses
+        checkpoint.i = i
+        checkpoint.epoch = epoch
+        torch.save(savefile, checkpoint)
+        print('done')
+    end
+
+    if i % opt.print_every == 0 then
+        print(string.format("%d/%d (epoch %.3f), train_loss = %6.8f, grad/param norm = %6.4e, time/batch = %.4fs", i, iterations, epoch, trainLoss, gradParams:norm() / params:norm(), time))
+    end
+
+    if i % 10 == 0 then
+        collectgarbage()
+    end
+
 end
 
