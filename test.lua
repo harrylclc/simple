@@ -1,9 +1,8 @@
-require 'hdf5'
-
 cmd = torch.CmdLine()
 cmd:option('-data', '/data_giles/cul226/simple/preprocessed/newsla_Google.hdf5', 'training data and word2vec data')
 cmd:option('-gpuid', 1, 'gpu id')
 cmd:option('-init_from', '', 'init from checkpoint model')
+cmd:option('-vocab', '', 'vocabulary file')
 
 opt = cmd:parse(arg)
 
@@ -14,8 +13,26 @@ if opt.gpuid >= 0 then
     require 'cudnn'
 end
 
+function seqtosent(seq, id2wd)
+    sent = ''
+    for i = 1, seq:size(1) do
+        wd = seq[i]
+        if wd == 1 then
+            break
+        end
+        sent = sent .. id2wd[wd] .. ' '
+    end
+    return sent
+end
+
 local DL = require 'DataLoader'
-loader = DL.create(opt.data)
+local loader = DL.create(opt.data)
+
+local wd2id = DL.loadVocab(opt.vocab)
+local id2wd = {}
+for wd, id in pairs(wd2id) do
+    id2wd[id] = wd
+end
 
 local EncDec = require 'EncoderDecoder'
 
@@ -29,16 +46,37 @@ else
 end
 
 local model = encoderDecoder.model
+model:evaluate()
+
 local enc = encoderDecoder.enc
 local dec = encoderDecoder.dec
 local encLSTM = encoderDecoder.encLSTM
 local decLSTM = encoderDecoder.decLSTM
+local linear = dec:get(4).modules[1].modules[1]
+local softmax = dec:get(5).modules[1].modules[1]
 
-local inSeq = loader.dataXRev[1]
+local predictor = nn.Sequential():add(decLSTM):add(linear):add(softmax)
+
+local idx = 1000
+local inSeq = loader.dataXRev[idx]
+
+local inSent = seqtosent(loader.dataX[idx], id2wd)
+print(inSent)
+
+local outseq = loader.dataY[idx]
+local outSent = seqtosent(outseq, id2wd)
+print(outSent)
+
 local encOut = enc:forward(inSeq)
-print(encOut:size())
-EncDec.forwardConnect(encLSTM, decLSTM, inSeq:size())
+EncDec.forwardConnect(encLSTM, decLSTM, inSeq:size(1))
+local prevWd = 1
+local maxLen = 20
 
-local zeros = torch.Tensore(encOut:size(2))
-
+for i = 1, maxLen do
+    vec = loader.w2v[prevWd]
+    pred = predictor:forward(vec)
+    local _, prevWd = torch.max(pred, 1)
+    io.write(id2wd[prevWd[1]] .. ' ')
+end
+io.write('\n')
 

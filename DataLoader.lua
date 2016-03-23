@@ -1,3 +1,5 @@
+require 'hdf5'
+
 local DataLoader = {}
 DataLoader.__index = DataLoader
 
@@ -86,7 +88,7 @@ function DataLoader.loadVocab(vocabFile)
         for wd in string.gmatch(line, "%S+") do
             table.insert(wds, wd)
         end
-        wd2id[wds[1]] = wds[2]
+        wd2id[wds[1]] = tonumber(wds[2])
     end
     return wd2id
 end
