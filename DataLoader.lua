@@ -2,6 +2,8 @@ local DataLoader = {}
 DataLoader.__index = DataLoader
 
 function DataLoader.create(dataFile, batchSize)
+    batchSize = batchSize or 1
+
     self = {}
     setmetatable(self, DataLoader)
 
