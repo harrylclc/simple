@@ -3,7 +3,6 @@ require 'optim'
 
 cmd = torch.CmdLine()
 cmd:option('-data', '/data_giles/cul226/simple/preprocessed/newsla_Google.hdf5', 'training data and word2vec data')
-cmd:option('-gpu', 0, 'use gpu')
 cmd:option('-gpuid', 1, 'gpu id')
 cmd:option('-save_every', 3000, 'save model every # iterations')
 cmd:option('-checkpoint_dir', '/data_giles/cul226/simple/models', 'checkpoint dir')
@@ -15,11 +14,12 @@ cmd:option('-learningRate', 0.001, 'learning rate')
 cmd:option('-momentum', 0.9, 'momentum')
 cmd:option('-threads', 4 , 'number of threads')
 cmd:option('-init_from', '', 'init from checkpoint model')
+cmd:option('-opt', 'sgd', 'which optimization method to use')
 
 -- options
 opt = cmd:parse(arg)
 
-if opt.gpu == 1 then
+if opt.gpuid >= 0 then
     require 'cutorch'
     cutorch.setDevice(opt.gpuid + 1)
     require 'cunn'
@@ -48,18 +48,31 @@ end
 local model = encoderDecoder.model
 local criterion = nn.SequencerCriterion(nn.ClassNLLCriterion())
 
-local sgdState = {
-    learningRate = opt.learningRate,
-    momentum = opt.momentum,
-    learningRateDecay = 5e-7
-}
-
 local toTable = nn.SplitTable(1, 1)
 
-if opt.gpu == 1 then
+if opt.gpuid >= 0 then
     model:cuda()
     criterion:cuda()
     toTable:cuda()
+end
+
+local optimMethod, optimState
+
+if opt.opt == 'sgd' then
+    optimState = {
+        learningRate = opt.learningRate,
+        momentum = opt.momentum,
+        learningRateDecay = 5e-7
+    }
+    optimMethod = optim.sgd
+elseif opt.opt == 'rmsprop' then
+    optimState = {
+        learningRate = opt.learning_rate,
+        alpha = 0.95
+    }
+    optimMethod = optim.rmsprop
+else
+    error('unknown optimization method')
 end
 
 params, gradParams = model:getParameters()
@@ -74,7 +87,7 @@ for i = 1, iterations do
     local timer = torch.Timer()
 
     local encInSeq, decInSeq, decOutSeq = loader:nextBatch()
-    if opt.gpu == 1 then
+    if opt.gpuid >= 0 then
         encInSeq = encInSeq:cuda()
         decInSeq = decInSeq:cuda()
         decOutSeq = decOutSeq:cuda()
@@ -91,7 +104,6 @@ for i = 1, iterations do
         local decOut = encoderDecoder:forward(encInSeq, decInSeq)
 
         local err = criterion:forward(decOut, decOutSeq)
-        -- print(string.format("NLL err = %f ", err))
 
         -- backward
         local gradOutput = criterion:backward(decOut, decOutSeq)
@@ -100,7 +112,8 @@ for i = 1, iterations do
         return err, gradParams
     end
 
-    local _, loss = optim.sgd(feval, params, sgdState)
+    local _, loss = optimMethod(feval, params, optimState)
+
     local time = timer:time().real
     local trainLoss = loss[1]
     trainLosses[i] = trainLoss
