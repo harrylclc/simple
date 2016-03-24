@@ -1,3 +1,5 @@
+require 'misc'
+
 cmd = torch.CmdLine()
 cmd:option('-data', '/data_giles/cul226/simple/preprocessed/newsla_Google.hdf5', 'training data and word2vec data')
 cmd:option('-gpuid', 1, 'gpu id')
@@ -13,17 +15,6 @@ if opt.gpuid >= 0 then
     require 'cudnn'
 end
 
-function seqtosent(seq, id2wd)
-    sent = ''
-    for i = 1, seq:size(1) do
-        wd = seq[i]
-        if wd == 1 then
-            break
-        end
-        sent = sent .. id2wd[wd] .. ' '
-    end
-    return sent
-end
 
 local DL = require 'DataLoader'
 local loader = DL.create(opt.data)

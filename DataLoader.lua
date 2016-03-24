@@ -27,6 +27,7 @@ function DataLoader.create(dataFile, batchSize)
     self.dataYShift = dataYShift
     self.w2v = w2v
     self.batchSize = batchSize
+    self:shuffleData()
 
     self.trainSize = dataX:size(1)
     self.numBatches = math.floor(self.trainSize / batchSize)
@@ -57,10 +58,10 @@ function DataLoader:shuffleData()
     local dataXRev = torch.Tensor(self.dataXRev:size())
     local dataYShift = torch.Tensor(self.dataYShift:size())
     for i = 1, shuffle:size(1) do
-        dataX:select(1, i):copy(dataX:select(1, shuffle[i]))
-        dataY:select(1, i):copy(dataY:select(1, shuffle[i]))
-        dataXRev:select(1, i):copy(dataXRev:select(1, shuffle[i]))
-        dataYShift:select(1, i):copy(dataYShift:select(1, shuffle[i]))
+        dataX:select(1, i):copy(self.dataX:select(1, shuffle[i]))
+        dataY:select(1, i):copy(self.dataY:select(1, shuffle[i]))
+        dataXRev:select(1, i):copy(self.dataXRev:select(1, shuffle[i]))
+        dataYShift:select(1, i):copy(self.dataYShift:select(1, shuffle[i]))
     end
     self.dataX = dataX
     self.dataY = dataY

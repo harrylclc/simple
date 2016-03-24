@@ -1,5 +1,5 @@
-require 'hdf5'
 require 'optim'
+require 'misc'
 
 cmd = torch.CmdLine()
 cmd:option('-data', '/data_giles/cul226/simple/preprocessed/newsla_Google.hdf5', 'training data and word2vec data')
@@ -7,7 +7,8 @@ cmd:option('-gpuid', 1, 'gpu id')
 cmd:option('-save_every', 3000, 'save model every # iterations')
 cmd:option('-checkpoint_dir', '/data_giles/cul226/simple/models', 'checkpoint dir')
 cmd:option('-savefile','enc-dec','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
-cmd:option('-print_every', 1, 'print every # iterations')
+cmd:option('-print_every', 5, 'print every # iterations')
+cmd:option('-print_sent_every', 100, 'print model predictions every # iters')
 cmd:option('-epochs', 1, 'number of epochs')
 cmd:option('-batchSize', 8, 'batch size')
 cmd:option('-learningRate', 0.001, 'learning rate')
@@ -15,6 +16,7 @@ cmd:option('-momentum', 0.9, 'momentum')
 cmd:option('-threads', 4 , 'number of threads')
 cmd:option('-init_from', '', 'init from checkpoint model')
 cmd:option('-opt', 'sgd', 'which optimization method to use')
+cmd:option('-vocab', '', 'vocabulary file')
 
 -- options
 opt = cmd:parse(arg)
@@ -31,6 +33,11 @@ end
 
 local DL = require 'DataLoader'
 local loader = DL.create(opt.data, opt.batchSize)
+local wd2id = DL.loadVocab(opt.vocab)
+local id2wd = {}
+for wd, id in pairs(wd2id) do
+    id2wd[id] = wd
+end
 
 local EncDec = require 'EncoderDecoder'
 local encoderDecoder
@@ -81,6 +88,7 @@ local iterations = opt.epochs * loader.numBatches
 local iterationsPerEpoch = loader.numBatches
 
 trainLosses = {}
+print('start training...')
 for i = 1, iterations do
     model:training()
     local epoch = i / loader.numBatches
@@ -92,7 +100,6 @@ for i = 1, iterations do
         decInSeq = decInSeq:cuda()
         decOutSeq = decOutSeq:cuda()
     end
-    decOutSeq = toTable:forward(decOutSeq)
 
     local feval = function(x)
         if x ~= params then
@@ -103,6 +110,18 @@ for i = 1, iterations do
         -- forward
         local decOut = encoderDecoder:forward(encInSeq, decInSeq)
 
+        -- print prediction
+        if i % opt.print_sent_every == 0 then
+            local sent, sentlen = seqtosent(decOutSeq[1], id2wd)
+            print(sent)
+            for j =1, sentlen do
+                local _, wd = torch.max(decOut[j][1], 1)
+                io.write(id2wd[wd[1]] .. ' ')
+            end
+            io.write('\n\n')
+        end
+
+        decOutSeq = toTable:forward(decOutSeq)
         local err = criterion:forward(decOut, decOutSeq)
 
         -- backward
@@ -121,6 +140,7 @@ for i = 1, iterations do
     if i % opt.save_every == 0 or i % loader.numBatches == 0 or i == iterations then
         local savefile = string.format('%s/%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, trainLoss)
         print('iter ', i, 'save checkpoint', savefile)
+        cleanupModel(model)
         local checkpoint = {}
         checkpoint.encoderDecoder = encoderDecoder
         checkpoint.opt = opt
