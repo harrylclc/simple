@@ -38,7 +38,7 @@ def load_data(dataset, train_path):
                 wds = s.split(' ')
                 d = [w2idx[wd] for wd in wds]
                 if k == 1:
-                    data[2].append(len(d))
+                    data[2].append(len(d) + 1)
                     d.extend([1] * (max_sent_len[k] + 1 - len(d)))  # add EOS
                 data[k].append(d)
     # sort input sent by len
