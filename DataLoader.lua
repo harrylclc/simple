@@ -9,77 +9,135 @@ function DataLoader.create(dataFile, batchSize)
     self = {}
     setmetatable(self, DataLoader)
 
-    local w2v, dataX, dataY
-    dataX, dataY, w2v = DataLoader.loadData(dataFile)
-    
-    -- reverse input sequences
-    local dataXRev = torch.Tensor(dataX:size())
-    for i = 1, dataX:size(2) do
-        dataXRev:select(2, i):copy(dataX:select(2, dataX:size(2) + 1 - i))
+    local w2v, xChunks, yChunks, ylenChunks
+    xChunks, yChunks, ylenChunks, w2v = DataLoader.loadData(dataFile)
+
+    local xrevChunks = {}
+    local yshiftChunks = {}
+    self.chunkBatches = {}
+    self.numBatches = 0
+
+    for k = 1, #xChunks do
+        local dataX = xChunks[k]
+        -- reverse input sequences
+        local dataXRev = torch.Tensor(dataX:size())
+        for i = 1, dataX:size(2) do
+            dataXRev:select(2, i):copy(dataX:select(2, dataX:size(2) + 1 - i))
+        end
+        table.insert(xrevChunks, dataXRev)
+        local dataY = yChunks[k]
+        -- shift output sequences
+        local dataYShift = torch.cat(dataY:select(2, dataY:size(2)), dataY:sub(1, -1, 1, -2), 2)
+        table.insert(yshiftChunks, dataYShift)
+        local nBatches = math.ceil(dataX:size(1) / batchSize)
+        self.chunkBatches[k] = nBatches
+        self.numBatches = self.numBatches + nBatches
     end
 
-    -- shift output sequences
-    local dataYShift = torch.cat(dataY:select(2, dataY:size(2)), dataY:sub(1, -1, 1, -2), 2)
-    
-    self.dataX = dataX
-    self.dataY = dataY
-    self.dataXRev = dataXRev
-    self.dataYShift = dataYShift
     self.w2v = w2v
-    self.batchSize = batchSize
-    self:shuffleData()
+    self.xChunks = xChunks
+    self.yChunks = yChunks
+    self.ylenChunks = ylenChunks
+    self.xrevChunks = xrevChunks
+    self.yshiftChunks = yshiftChunks
 
-    self.trainSize = dataX:size(1)
-    self.numBatches = math.floor(self.trainSize / batchSize)
+    self:prepro()
+
+    self.chunkIdx = 1
     self.batchIdx = 0
+    self.batchSize = batchSize
     collectgarbage()
     return self
 end
 
 function DataLoader:nextBatch()
     self.batchIdx = self.batchIdx + 1
-    if self.batchIdx > self.numBatches then
-        self:shuffleData()
+    if self.batchIdx > self.chunkBatches[self.chunkIdx] then
         self.batchIdx = 1
+        self.chunkIdx = self.chunkIdx + 1
+        if self.chunkIdx > #self.xChunks then
+            self.prepro()
+            self.chunkIdx = 1
+        end
     end
+    local xrev = self.xrevChunks[self.chunkIdx]
+    local yshift = self.yshiftChunks[self.chunkIdx]
+    local y = self.yChunks[self.chunkIdx]
+
     local st = (self.batchIdx - 1) * self.batchSize + 1
-    local batchSize = math.min(self.batchSize, self.trainSize - st + 1)
-    local encInSeq = self.dataXRev:narrow(1, st, self.batchSize)
-    local decInSeq = self.dataYShift:narrow(1, st, self.batchSize)
-    local decOutSeq = self.dataY:narrow(1, st, self.batchSize)
-    return encInSeq, decInSeq, decOutSeq
+    local batchSize = math.min(self.batchSize, self.xChunks[self.chunkIdx]:size(1) - st + 1)
+    local ylen = self.ylenChunks[self.chunkIdx]:narrow(1, st, batchSize)
+    local maxlen = torch.max(ylen)
+    local encInSeq = xrev:narrow(1, st, batchSize)
+    local decInSeq = yshift:sub(st, st + batchSize - 1, 1, maxlen)
+    local decOutSeq = y:sub(st, st + batchSize - 1, 1, maxlen)
+    return encInSeq, decInSeq, decOutSeq, ylen
+end
+
+function DataLoader:prepro()
+    self:shuffleData()
+    self:sortByLen()
 end
 
 function DataLoader:shuffleData()
     print('shuffle data...')
-    local shuffle = torch.randperm(self.dataX:size(1))
-    local dataX = torch.Tensor(self.dataX:size())
-    local dataY = torch.Tensor(self.dataY:size())
-    local dataXRev = torch.Tensor(self.dataXRev:size())
-    local dataYShift = torch.Tensor(self.dataYShift:size())
-    for i = 1, shuffle:size(1) do
-        dataX:select(1, i):copy(self.dataX:select(1, shuffle[i]))
-        dataY:select(1, i):copy(self.dataY:select(1, shuffle[i]))
-        dataXRev:select(1, i):copy(self.dataXRev:select(1, shuffle[i]))
-        dataYShift:select(1, i):copy(self.dataYShift:select(1, shuffle[i]))
+    for k = 1, #self.xChunks do
+        local shuffle = torch.randperm(self.xChunks[k]:size(1))
+        self:permuteChunk(k, shuffle)
     end
-    self.dataX = dataX
-    self.dataY = dataY
-    self.dataXRev = dataXRev
-    self.dataYShift = dataYShift
-    collectgarbage()
     print('shuffle data done')
 end
 
+function DataLoader:sortByLen()
+    print('sorting data by the length of y...')
+    for k = 1, #self.xChunks do
+        local _, indices = torch.sort(self.ylenChunks[k])
+        self:permuteChunk(k, indices)
+    end
+    print('sorting done')
+end
+
+function DataLoader:permuteChunk(k, indices)
+    local dataX = torch.Tensor(self.xChunks[k]:size())
+    local dataY = torch.Tensor(self.yChunks[k]:size())
+    local dataXRev = torch.Tensor(self.xrevChunks[k]:size())
+    local dataYShift = torch.Tensor(self.yshiftChunks[k]:size())
+    local ylen = torch.Tensor(self.ylenChunks[k]:size())
+    for i = 1, indices:size(1) do
+        dataX:select(1, i):copy(self.xChunks[k]:select(1, indices[i]))
+        dataY:select(1, i):copy(self.yChunks[k]:select(1, indices[i]))
+        dataXRev:select(1, i):copy(self.xrevChunks[k]:select(1, indices[i]))
+        dataYShift:select(1, i):copy(self.yshiftChunks[k]:select(1, indices[i]))
+        ylen[i] = self.ylenChunks[k][indices[i]]
+    end
+    self.xChunks[k] = dataX
+    self.yChunks[k] = dataY
+    self.xrevChunks[k] = dataXRev
+    self.yshiftChunks[k] = dataYShift
+    self.ylenChunks[k] = ylen
+    collectgarbage()
+end
+
 function DataLoader.loadData(dataFile)
-    local w2v, dataX, dataY
+    local w2v
     print('loading data...')
     local f = hdf5.open(dataFile, 'r')
     w2v = f:read('w2v'):all()
-    dataX = f:read('data_x'):all()
-    dataY = f:read('data_y'):all()
+    local xlens = f:read('x_lens'):all()
+    local xChunks = {}
+    local yChunks = {}
+    local ylenChunks = {}
+    local dataX, dataY, lenY
+    for i = 1, xlens:size(1) do
+        dataX = f:read('x_' .. xlens[i]):all()
+        dataY = f:read('y_' .. xlens[i]):all()
+        lenY = f:read('ylen_' .. xlens[i]):all()
+        table.insert(xChunks, dataX)
+        table.insert(yChunks, dataY)
+        table.insert(ylenChunks, lenY)
+    end
     print('done')
-    return dataX, dataY, w2v
+    return xChunks, yChunks, ylenChunks, w2v
 end
 
 function DataLoader.loadVocab(vocabFile)

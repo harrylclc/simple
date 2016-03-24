@@ -30,17 +30,29 @@ def get_vocab(dataset, path):
 def load_data(dataset, train_path):
     max_sent_len, w2idx = get_vocab(dataset, train_path)
     print max_sent_len
-    data = [[], []]
+    data = [[], [], []]
     with open(train_path) as f:
         for line in f:
             sents = line.strip().split('\t')[:2]
             for k, s in enumerate(sents):
                 wds = s.split(' ')
                 d = [w2idx[wd] for wd in wds]
-                d.extend([1] * (max_sent_len[k] + 1 - len(d)))  # add EOS
+                if k == 1:
+                    data[2].append(len(d))
+                    d.extend([1] * (max_sent_len[k] + 1 - len(d)))  # add EOS
                 data[k].append(d)
-    return w2idx, np.array(data[0], dtype=np.int32), \
-           np.array(data[1], dtype=np.int32)
+    # sort input sent by len
+    x_sorted = sorted(enumerate(data[0]), key=lambda x: len(x[1]))
+    chunks = {}
+    for kv in x_sorted:
+        l = len(kv[1])
+        if l not in chunks:
+            chunks[l] = [[], [], []]
+        chunks[l][0].append(kv[1])
+        chunks[l][1].append(data[1][kv[0]])
+        chunks[l][2].append(data[2][kv[0]])
+
+    return w2idx, chunks
 
 
 def load_w2v(path_to_bin, vocab):
@@ -81,7 +93,7 @@ if __name__ == '__main__':
         exit()
 
     train_path = FILE_PATHS[dataset]
-    w2idx, data_x, data_y = load_data(dataset, train_path)
+    w2idx, chunks = load_data(dataset, train_path)
 
     # save vocab
     with open(os.path.join(output_dir, dataset + '.vocab'), 'w') as out:
@@ -99,17 +111,13 @@ if __name__ == '__main__':
     for wd, vec in w2v.items():
         embed[w2idx[wd] - 1] = vec
 
-    # Shuffle train
-    print 'train size:', data_x.shape
-    N = data_x.shape[0]
-    perm = np.random.permutation(N)
-    data_x = data_x[perm]
-    data_y = data_y[perm]
-
     output_file = os.path.join(output_dir, dataset + '.hdf5')
     print 'save to', output_file
     with h5py.File(output_file, 'w') as f:
         f['w2v'] = np.array(embed)
-        f['data_x'] = data_x
-        f['data_y'] = data_y
+        f['x_lens'] = np.array(chunks.keys(), dtype=np.int32)
+        for l in chunks:
+            f['x_' + str(l)] = np.array(chunks[l][0], dtype=np.int32)
+            f['y_' + str(l)] = np.array(chunks[l][1], dtype=np.int32)
+            f['ylen_' + str(l)] = np.array(chunks[l][2], dtype=np.int32)
 

@@ -100,7 +100,7 @@ for i = 1, iterations do
     local epoch = i / loader.numBatches
     local timer = torch.Timer()
 
-    local encInSeq, decInSeq, decOutSeq = loader:nextBatch()
+    local encInSeq, decInSeq, decOutSeq, ylen = loader:nextBatch()
     if opt.gpuid >= 0 then
         encInSeq = encInSeq:cuda()
         decInSeq = decInSeq:cuda()
@@ -128,6 +128,18 @@ for i = 1, iterations do
         end
 
         decOutSeq = toTable:forward(decOutSeq)
+
+        -- mask decOut
+        local ylenmin = torch.min(ylen)
+        local ylenmax = torch.max(ylen)
+        for j = ylenmin + 1, ylenmax do
+            for k = 1, ylen:size(1) do
+                if ylen[k] < decInSeq:size(2) then
+                    decOut[j][k]:zero()
+                end
+            end
+        end
+
         local err = criterion:forward(decOut, decOutSeq)
 
         -- backward
