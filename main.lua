@@ -78,6 +78,12 @@ elseif opt.opt == 'rmsprop' then
         alpha = 0.95
     }
     optimMethod = optim.rmsprop
+elseif opt.opt == 'adadelta' then
+    optimState= {
+        rho = 0.95,
+        eps = 1e-6
+    }
+    optimMethod = optim.adadelta
 else
     error('unknown optimization method')
 end
