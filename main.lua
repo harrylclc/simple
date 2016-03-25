@@ -40,17 +40,7 @@ for wd, id in pairs(wd2id) do
 end
 
 local EncDec = require 'EncoderDecoder'
-local encoderDecoder
-
-if string.len(opt.init_from) > 0 then
-    print('init model from', opt.init_from)
-    local checkpoint = torch.load(opt.init_from)
-    encoderDecoder = checkpoint.encoderDecoder
-    setmetatable(encoderDecoder, EncDec)
-else
-    encoderDecoder = EncDec.create(loader.w2v)
-end
-
+local encoderDecoder = EncDec.create(loader.w2v)
 
 local model = encoderDecoder.model
 local criterion = nn.SequencerCriterion(nn.ClassNLLCriterion())
@@ -89,6 +79,17 @@ else
 end
 
 params, gradParams = model:getParameters()
+
+print('number of parameters in the model: ' .. params:nElement())
+
+if string.len(opt.init_from) > 0 then
+    print('init model from', opt.init_from)
+    local checkpoint = torch.load(opt.init_from)
+    params:copy(checkpoint.params)
+    --encoderDecoder = checkpoint.encoderDecoder
+    --setmetatable(encoderDecoder, EncDec)
+end
+
 
 local iterations = opt.epochs * loader.numBatches
 local iterationsPerEpoch = loader.numBatches
@@ -157,7 +158,8 @@ for i = 1, iterations do
         -- cleanupModel(model)
         model:clearState()
         local checkpoint = {}
-        checkpoint.encoderDecoder = encoderDecoder
+        -- checkpoint.encoderDecoder = encoderDecoder
+        checkpoint.params = params -- only save params for low storage
         checkpoint.opt = opt
         checkpoint.trainLosses = trainLosses
         checkpoint.i = i
