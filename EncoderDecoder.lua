@@ -11,14 +11,17 @@ function EncoderDecoder.create(w2v)
     local vocabSize = w2v:size(1)
     local vecSize = w2v:size(2)
     -- pre-trained w2v
-    local lookup = nn.LookupTable(vocabSize, vecSize)
-    lookup.weight:copy(w2v)
-    lookup.weight[1]:zero()
-    lookup.accGradParameters = nil
+    local lookup1 = nn.LookupTable(vocabSize, vecSize)
+    lookup1.weight:copy(w2v)
+    lookup1.weight[1]:zero()
+    lookup1.accGradParameters = nil
+
+    local lookup2 = lookup1:clone()
+    lookup2.accGradParameters = nil
 
     -- encoder
     local enc = nn.Sequential()
-    enc:add(lookup)
+    enc:add(lookup1)
     enc:add(nn.SplitTable(1, 2))
     local encLSTM = nn.LSTM(vecSize, vecSize)
     enc:add(nn.Sequencer(encLSTM))
@@ -26,7 +29,7 @@ function EncoderDecoder.create(w2v)
 
     -- decoder
     local dec = nn.Sequential()
-    dec:add(lookup)
+    dec:add(lookup2)
     dec:add(nn.SplitTable(1, 2))
     local decLSTM = nn.LSTM(vecSize, vecSize)
     dec:add(nn.Sequencer(decLSTM))
@@ -50,10 +53,10 @@ function EncoderDecoder:forward(encInSeq, decInSeq)
 end
 
 function EncoderDecoder:backward(encInSeq, decInSeq, gradOutput)
-    local zeroTensor = torch.Tensor(encInSeq:size(1), self.encLSTM.outputSize)
+    local zeroTensor = torch.Tensor(encInSeq:size(1), self.encLSTM.outputSize):typeAs(encInSeq):zero()
     self.dec:backward(decInSeq, gradOutput)
     EncoderDecoder.backwardConnect(self.encLSTM, self.decLSTM)
-    self.enc:backward(encInSeq, self.zeroTensor)
+    self.enc:backward(encInSeq, zeroTensor)
 end
 
 --[[ Forward coupling: Copy encoder cell and output to decoder LSTM ]]--

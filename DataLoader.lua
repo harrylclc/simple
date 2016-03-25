@@ -119,10 +119,9 @@ function DataLoader:permuteChunk(k, indices)
 end
 
 function DataLoader.loadData(dataFile)
-    local w2v
     print('loading data...')
     local f = hdf5.open(dataFile, 'r')
-    w2v = f:read('w2v'):all()
+    local w2v = f:read('w2v'):all()
     local xlens = f:read('x_lens'):all()
     local xChunks = {}
     local yChunks = {}

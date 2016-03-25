@@ -16,7 +16,7 @@ cmd:option('-momentum', 0.9, 'momentum')
 cmd:option('-threads', 4 , 'number of threads')
 cmd:option('-init_from', '', 'init from checkpoint model')
 cmd:option('-opt', 'sgd', 'which optimization method to use')
-cmd:option('-vocab', '', 'vocabulary file')
+cmd:option('-vocab', '/data_giles/cul226/simple/preprocessed/newsla.vocab', 'vocabulary file')
 
 -- options
 opt = cmd:parse(arg)
@@ -106,7 +106,6 @@ for i = 1, iterations do
         decInSeq = decInSeq:cuda()
         decOutSeq = decOutSeq:cuda()
     end
-
     local feval = function(x)
         if x ~= params then
             params:copy(x)
@@ -130,13 +129,10 @@ for i = 1, iterations do
         decOutSeq = toTable:forward(decOutSeq)
 
         -- mask decOut
-        local ylenmin = torch.min(ylen)
         local ylenmax = torch.max(ylen)
-        for j = ylenmin + 1, ylenmax do
-            for k = 1, ylen:size(1) do
-                if ylen[k] < decInSeq:size(2) then
-                    decOut[j][k]:zero()
-                end
+        for j = 1, ylen:size(1) do
+            for k = ylen[j] + 1, ylenmax do
+                decOut[k][j]:zero()
             end
         end
 
