@@ -56,7 +56,7 @@ function DataLoader:nextBatch()
         self.batchIdx = 1
         self.chunkIdx = self.chunkIdx + 1
         if self.chunkIdx > #self.xChunks then
-            self.prepro()
+            self:prepro()
             self.chunkIdx = 1
         end
     end

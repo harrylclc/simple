@@ -154,7 +154,8 @@ for i = 1, iterations do
     if i % opt.save_every == 0 or i % loader.numBatches == 0 or i == iterations then
         local savefile = string.format('%s/%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, trainLoss)
         print('iter ', i, 'save checkpoint', savefile)
-        cleanupModel(model)
+        -- cleanupModel(model)
+        model:clearState()
         local checkpoint = {}
         checkpoint.encoderDecoder = encoderDecoder
         checkpoint.opt = opt

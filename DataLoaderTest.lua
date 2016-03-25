@@ -1,3 +1,7 @@
+cmd = torch.CmdLine()
+cmd:option('-data', '/data_giles/cul226/simple/preprocessed/newsla_Google.hdf5', '')
+opt = cmd:parse(arg)
+
 dl = require 'DataLoader'
-loader = dl.create('/data/home/cul226/simple/preprocessed/newsla.hdf5', 8)
+loader = dl.create(opt.data, 8)
 
