@@ -11,32 +11,41 @@ FILE_PATHS = {'newsla': '/data/home/cul226/simple/newsla_sents',
 def get_vocab(dataset, path):
     max_sent_len = [0, 0]
     w2idx = {}
-    # starts from 2 for EOS
-    idx = 2
+    w2idx['*EOS*'] = 1
+    freq = {}
 
     with open(path) as f:
         for line in f:
             sents = line.strip().split('\t')[:2]
             for k, s in enumerate(sents):
-                wds = s.split(' ')
+                wds = [wd for wd in s.split(' ') if len(wd) > 0]
                 max_sent_len[k] = max(max_sent_len[k], len(wds))
                 for wd in wds:
+                    freq[wd] = freq.get(wd, 0) + 1
                     if not wd in w2idx:
-                        w2idx[wd] = idx
-                        idx += 1
-    return max_sent_len, w2idx
+                        w2idx[wd] = len(w2idx) + 1
+
+    if args.add_ukt:
+        w2idx_filter = {}
+        w2idx_filter['*EOS*'] = 1
+        w2idx_filter['*UKT*'] = 2
+        for wd in w2idx:
+            if w2idx[wd] != 1 and freq[wd] >= args.min_freq:
+                w2idx_filter[wd] = len(w2idx_filter) + 1
+        w2idx = w2idx_filter
+    return max_sent_len, w2idx, freq
 
 
 def load_data(dataset, train_path):
-    max_sent_len, w2idx = get_vocab(dataset, train_path)
+    max_sent_len, w2idx, freq = get_vocab(dataset, train_path)
     print max_sent_len
     data = [[], [], []]
     with open(train_path) as f:
         for line in f:
             sents = line.strip().split('\t')[:2]
             for k, s in enumerate(sents):
-                wds = s.split(' ')
-                d = [w2idx[wd] for wd in wds]
+                wds = [wd for wd in s.split(' ') if len(wd) > 0]
+                d = [w2idx[wd] if wd in w2idx else 2 for wd in wds]
                 if k == 1:
                     data[2].append(len(d) + 1)
                     d.extend([1] * (max_sent_len[k] + 1 - len(d)))  # add EOS
@@ -85,6 +94,8 @@ if __name__ == '__main__':
     parser.add_argument('-w2v', dest='w2v', required=True)
     parser.add_argument('-output_dir', dest='output_dir',
                         default='/data/home/cul226/simple/preprocessed/')
+    parser.add_argument('--add_ukt', action='store_true')
+    parser.add_argument('-min_freq', dest='min_freq', type=int, default=5)
     args = parser.parse_args()
     dataset = args.data
     output_dir = args.output_dir
@@ -97,11 +108,10 @@ if __name__ == '__main__':
 
     # save vocab
     with open(os.path.join(output_dir, dataset + '.vocab'), 'w') as out:
-        out.write('*EOS* 1\n')
         for wd, idx in sorted(w2idx.items(), key=operator.itemgetter(1)):
             out.write('{} {}\n'.format(wd, idx))
 
-    V = len(w2idx) + 1
+    V = len(w2idx)
     print 'Vocab size:', V
 
     w2v = load_w2v(args.w2v, w2idx)
