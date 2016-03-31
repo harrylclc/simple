@@ -67,7 +67,7 @@ def load_data(dataset, train_path):
                len(sents_id[1]) > args.max_len:
                 continue
             data[2].append(len(sents_id[1]))
-            sents_id[1].extend([1] * (max_y_len - len(sents_id[1])))
+            sents_id[1].extend([1] * (max_y_len + 1 - len(sents_id[1])))
             for i in xrange(2):
                 data[i].append(sents_id[i])
     print 'Total {} pairs of sentence'.format(len(data[0]))
