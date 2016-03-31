@@ -3,10 +3,18 @@ import numpy as np
 import os
 import operator
 import h5py
+import re
 
-FILE_PATHS = {'newsla': '/data/home/cul226/simple/newsla_sents',
-              'wiki': '/data/home/cul226/simple/aligned-good(0.67)'
+FILE_PATHS = {'newsela': '/data/home/cul226/simple/sents/newsela.sents',
+              'acl': '/data/home/cul226/simple/sents/acl.sents',
+              'naacl': '/data/home/cul226/simple/sents/naacl.sents',
+              'pwkp':'/data/home/cul226/simple/sents/pwkp.sents',
+              'combine': '/data/home/cul226/simple/combine.sents',
              }
+
+def remove_digits(parse):
+    return re.sub(r'\d', '#', parse)
+
 
 def get_vocab(dataset, path):
     max_sent_len = [0, 0]
@@ -18,6 +26,7 @@ def get_vocab(dataset, path):
         for line in f:
             sents = line.strip().split('\t')[:2]
             for k, s in enumerate(sents):
+                s = remove_digits(s)
                 wds = [wd for wd in s.split(' ') if len(wd) > 0]
                 max_sent_len[k] = max(max_sent_len[k], len(wds))
                 for wd in wds:
@@ -29,9 +38,12 @@ def get_vocab(dataset, path):
         w2idx_filter = {}
         w2idx_filter['*EOS*'] = 1
         w2idx_filter['*UKT*'] = 2
-        for wd in w2idx:
-            if w2idx[wd] != 1 and freq[wd] >= args.min_freq:
-                w2idx_filter[wd] = len(w2idx_filter) + 1
+        sorted_freq = sorted(freq.items(), key=operator.itemgetter(1),
+                             reverse=True)
+        for k, (wd, cnt) in enumerate(sorted_freq):
+            if k == args.max_vocab_size or cnt < args.min_freq:
+                break
+            w2idx_filter[wd] = len(w2idx_filter) + 1
         w2idx = w2idx_filter
     return max_sent_len, w2idx, freq
 
@@ -39,17 +51,26 @@ def get_vocab(dataset, path):
 def load_data(dataset, train_path):
     max_sent_len, w2idx, freq = get_vocab(dataset, train_path)
     print max_sent_len
+    max_y_len = min(max_sent_len[1], args.max_len)
     data = [[], [], []]
     with open(train_path) as f:
         for line in f:
             sents = line.strip().split('\t')[:2]
+            sents_id = []
             for k, s in enumerate(sents):
+                s = remove_digits(s)
                 wds = [wd for wd in s.split(' ') if len(wd) > 0]
                 d = [w2idx[wd] if wd in w2idx else 2 for wd in wds]
-                if k == 1:
-                    data[2].append(len(d) + 1)
-                    d.extend([1] * (max_sent_len[k] + 1 - len(d)))  # add EOS
-                data[k].append(d)
+                d.extend([1])   # EOS
+                sents_id.append(d)
+            if len(sents_id[0]) > args.max_len or\
+               len(sents_id[1]) > args.max_len:
+                continue
+            data[2].append(len(sents_id[1]))
+            sents_id[1].extend([1] * (max_y_len - len(sents_id[1])))
+            for i in xrange(2):
+                data[i].append(sents_id[i])
+    print 'Total {} pairs of sentence'.format(len(data[0]))
     # sort input sent by len
     x_sorted = sorted(enumerate(data[0]), key=lambda x: len(x[1]))
     chunks = {}
@@ -96,6 +117,9 @@ if __name__ == '__main__':
                         default='/data/home/cul226/simple/preprocessed/')
     parser.add_argument('--add_ukt', action='store_true')
     parser.add_argument('-min_freq', dest='min_freq', type=int, default=5)
+    parser.add_argument('-max_vocab_size', dest='max_vocab_size', type=int,
+                        default=40000)
+    parser.add_argument('-max_len', dest='max_len', type=int, default=100)
     args = parser.parse_args()
     dataset = args.data
     output_dir = args.output_dir
