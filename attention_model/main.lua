@@ -37,6 +37,9 @@ end
 ---------------------- Model -----------------------
 -- encoder
 local lookup1 = nn.LookupTable(vocabSize, vecSize)
+lookup1.weight:copy(loader.w2v)  -- use pretrained w2v
+lookup1.weight[1]:zero()
+
 local enc = nn.Sequential()
 enc:add(lookup1)
 enc:add(nn.SplitTable(1,2))
@@ -47,7 +50,7 @@ enc:add(nn.Transpose({1,2}))
 
 -- decoder
 local decLookup = nn.Sequential()
-local lookup2 = nn.LookupTable(vocabSize, vecSize)
+local lookup2 = lookup1:clone()
 decLookup:add(lookup2)
 decLookup:add(nn.SplitTable(1,2))
 local decgru = nn.GRUAttention(vecSize, opt.hiddenSize, opt.hiddenSize*2, vocabSize)
@@ -183,6 +186,8 @@ for i = 1, iterations do
         return err, gradParams
     end
     local _, loss = optimMethod(feval, params, optimState)
+    lookup1.weight[1]:zero()
+    lookup2.weight[1]:zero()
 
     local time = timer:time().real
     local trainLoss = loss[1] / (math.ceil(torch.mean(ylen)))
