@@ -60,6 +60,7 @@ function DataLoader:nextBatch()
             self.chunkIdx = 1
         end
     end
+    local x = self.xChunks[self.chunkIdx]
     local xrev = self.xrevChunks[self.chunkIdx]
     local yshift = self.yshiftChunks[self.chunkIdx]
     local y = self.yChunks[self.chunkIdx]
@@ -68,10 +69,11 @@ function DataLoader:nextBatch()
     local batchSize = math.min(self.batchSize, self.xChunks[self.chunkIdx]:size(1) - st + 1)
     local ylen = self.ylenChunks[self.chunkIdx]:narrow(1, st, batchSize)
     local maxlen = torch.max(ylen)
-    local encInSeq = xrev:narrow(1, st, batchSize)
+    local encInSeq = x:narrow(1, st, batchSize)
+    local encInSeqRev = xrev:narrow(1, st, batchSize)
     local decInSeq = yshift:sub(st, st + batchSize - 1, 1, maxlen)
     local decOutSeq = y:sub(st, st + batchSize - 1, 1, maxlen)
-    return encInSeq, decInSeq, decOutSeq, ylen
+    return encInSeq, encInSeqRev, decInSeq, decOutSeq, ylen
 end
 
 function DataLoader:prepro()
