@@ -1,6 +1,4 @@
 require 'optim'
-require 'nn'
-require 'GRUAttention'
 require 'rnn'
 require '../utils/misc'
 
@@ -27,6 +25,18 @@ end
 local vocabSize = loader.w2v:size(1)
 local vecSize = loader.w2v:size(2)
 
+local encrnn, decrnn
+if opt.useBN then
+    require 'GRUAttentionBN'
+    require 'GRUBN'
+    encrnn = nn.GRUBN
+    decrnn = nn.GRUAttentionBN
+else
+    require 'GRUAttention'
+    encrnn = nn.GRU
+    decrnn = nn.GRUAttention
+end
+
 local checkpoint
 if string.len(opt.init_from) > 0 then
     print('init model from', opt.init_from)
@@ -43,7 +53,7 @@ lookup1.weight[1]:zero()
 local enc = nn.Sequential()
 enc:add(lookup1)
 enc:add(nn.SplitTable(1,2))
-local encgru = nn.GRU(vecSize, opt.hiddenSize)
+local encgru = encrnn(vecSize, opt.hiddenSize)
 enc:add(nn.BiSequencer(encgru))
 enc:add(nn.ConvertTable())
 enc:add(nn.Transpose({1,2}))
@@ -53,7 +63,7 @@ local decLookup = nn.Sequential()
 local lookup2 = lookup1:clone()
 decLookup:add(lookup2)
 decLookup:add(nn.SplitTable(1,2))
-local decgru = nn.GRUAttention(vecSize, opt.hiddenSize, opt.hiddenSize*2, vocabSize)
+local decgru = decrnn(vecSize, opt.hiddenSize, opt.hiddenSize*2, vocabSize)
 
 -- init decoder
 local getMean = nn.Sequential()
@@ -109,6 +119,12 @@ else
 end
 
 local iterations = opt.epochs * loader.numBatches
+
+if opt.log then
+    trainLogger = optim.Logger(string.format('%s/%s.log', opt.checkpoint_dir,
+                               opt.savefile))
+    trainLogger.showPlot = false
+end
 
 for i = 1, iterations do
     model:training()
@@ -183,6 +199,8 @@ for i = 1, iterations do
         local encInMeanGrad = getMean:backward(encOut, decgru.userGradPrevOutput)
         encInGrad:add(encInMeanGrad)
         enc:backward(encInSeq, encInGrad)
+
+        gradParams:clamp(-opt.gradClip, opt.gradClip)
         return err, gradParams
     end
     local _, loss = optimMethod(feval, params, optimState)
@@ -191,7 +209,9 @@ for i = 1, iterations do
 
     local time = timer:time().real
     local trainLoss = loss[1] / (math.ceil(torch.mean(ylen)))
-
+    if trainLogger then
+        trainLogger:add{['loss'] = trainLoss}
+    end
     if i % opt.save_every == 0 or i % loader.numBatches == 0 or i == iterations then
         local savefile = string.format('%s/%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, trainLoss)
         print('iter ', i, 'save checkpoint', savefile)
@@ -203,6 +223,10 @@ for i = 1, iterations do
         checkpoint.epoch = epoch
         torch.save(savefile, checkpoint)
         print('done')
+        if trainLogger then
+            trainLogger:style{['loss'] = '-'}
+            trainLogger:plot()
+        end
     end
 
     if i % opt.print_every == 0 then

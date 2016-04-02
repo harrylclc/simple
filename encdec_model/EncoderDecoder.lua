@@ -4,7 +4,7 @@ require 'rnn'
 local EncoderDecoder = {}
 EncoderDecoder.__index = EncoderDecoder
 
-function EncoderDecoder.create(w2v)
+function EncoderDecoder.create(w2v, hiddenSize)
     local self = {}
     setmetatable(self, EncoderDecoder)
 
@@ -14,16 +14,16 @@ function EncoderDecoder.create(w2v)
     local lookup1 = nn.LookupTable(vocabSize, vecSize)
     lookup1.weight:copy(w2v)
     lookup1.weight[1]:zero()
-    lookup1.accGradParameters = nil
+    --lookup1.accGradParameters = nil
 
     local lookup2 = lookup1:clone()
-    lookup2.accGradParameters = nil
+    --lookup2.accGradParameters = nil
 
     -- encoder
     local enc = nn.Sequential()
     enc:add(lookup1)
     enc:add(nn.SplitTable(1, 2))
-    local encLSTM = nn.LSTM(vecSize, vecSize)
+    local encLSTM = nn.LSTM(vecSize, hiddenSize)
     enc:add(nn.Sequencer(encLSTM))
     enc:add(nn.SelectTable(-1))
 
@@ -31,9 +31,9 @@ function EncoderDecoder.create(w2v)
     local dec = nn.Sequential()
     dec:add(lookup2)
     dec:add(nn.SplitTable(1, 2))
-    local decLSTM = nn.LSTM(vecSize, vecSize)
+    local decLSTM = nn.LSTM(vecSize, hiddenSize)
     dec:add(nn.Sequencer(decLSTM))
-    dec:add(nn.Sequencer(nn.Linear(vecSize, vocabSize)))
+    dec:add(nn.Sequencer(nn.Linear(hiddenSize, vocabSize)))
     dec:add(nn.Sequencer(nn.LogSoftMax()))
 
     self.model = nn.Container():add(enc):add(dec)

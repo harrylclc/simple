@@ -42,6 +42,7 @@ function DataLoader.create(dataFile, batchSize)
     self.yshiftChunks = yshiftChunks
 
     self:prepro()
+    print(self.chunkBatches)
 
     self.chunkIdx = 1
     self.batchIdx = 0
@@ -52,11 +53,14 @@ end
 
 function DataLoader:nextBatch()
     self.batchIdx = self.batchIdx + 1
+    -- self.batchIdx = 1
     if self.batchIdx > self.chunkBatches[self.chunkIdx] then
+    -- if self.batchIdx > 20 then
         self.batchIdx = 1
         self.chunkIdx = self.chunkIdx + 1
-        if self.chunkIdx > #self.xChunks then
-            self:prepro()
+        -- if self.chunkIdx > #self.xChunks then
+        if self.chunkIdx > 4 then
+            -- self:prepro()
             self.chunkIdx = 1
         end
     end

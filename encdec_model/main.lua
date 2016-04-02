@@ -1,25 +1,9 @@
 require 'optim'
-require 'misc'
-
-cmd = torch.CmdLine()
-cmd:option('-data', '/data_giles/cul226/simple/preprocessed/newsla_Google.hdf5', 'training data and word2vec data')
-cmd:option('-gpuid', 1, 'gpu id')
-cmd:option('-save_every', 3000, 'save model every # iterations')
-cmd:option('-checkpoint_dir', '/data_giles/cul226/simple/models', 'checkpoint dir')
-cmd:option('-savefile','enc-dec','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
-cmd:option('-print_every', 5, 'print every # iterations')
-cmd:option('-print_sent_every', 100, 'print model predictions every # iters')
-cmd:option('-epochs', 1, 'number of epochs')
-cmd:option('-batchSize', 8, 'batch size')
-cmd:option('-learningRate', 0.001, 'learning rate')
-cmd:option('-momentum', 0.9, 'momentum')
-cmd:option('-threads', 4 , 'number of threads')
-cmd:option('-init_from', '', 'init from checkpoint model')
-cmd:option('-opt', 'sgd', 'which optimization method to use')
-cmd:option('-vocab', '/data_giles/cul226/simple/preprocessed/newsla.vocab', 'vocabulary file')
+require '../utils/misc'
 
 -- options
-opt = cmd:parse(arg)
+local opts = require '../utils/opts'
+opt = opts.parse(arg)
 
 if opt.gpuid >= 0 then
     require 'cutorch'
@@ -31,7 +15,8 @@ else
     print('<torch> set # threads to ' .. torch.getnumthreads())
 end
 
-local DL = require 'DataLoader'
+-- data loader
+local DL = require '../utils/DataLoader'
 local loader = DL.create(opt.data, opt.batchSize)
 local wd2id = DL.loadVocab(opt.vocab)
 local id2wd = {}
@@ -39,8 +24,15 @@ for wd, id in pairs(wd2id) do
     id2wd[id] = wd
 end
 
+local checkpoint
+if string.len(opt.init_from) > 0 then
+    print('init model from', opt.init_from)
+    checkpoint = torch.load(opt.init_from)
+    opt.hiddenSize = checkpoint.opt.hiddenSize
+end
+
 local EncDec = require 'EncoderDecoder'
-local encoderDecoder = EncDec.create(loader.w2v)
+local encoderDecoder = EncDec.create(loader.w2v, opt.hiddenSize)
 
 local model = encoderDecoder.model
 local criterion = nn.SequencerCriterion(nn.ClassNLLCriterion())
@@ -51,6 +43,13 @@ if opt.gpuid >= 0 then
     model:cuda()
     criterion:cuda()
     toTable:cuda()
+end
+
+params, gradParams = model:getParameters()
+print('number of parameters in the model: ' .. params:nElement())
+
+if checkpoint ~= nil then
+    params:copy(checkpoint.params)
 end
 
 local optimMethod, optimState
@@ -78,22 +77,7 @@ else
     error('unknown optimization method')
 end
 
-params, gradParams = model:getParameters()
-
-print('number of parameters in the model: ' .. params:nElement())
-
-if string.len(opt.init_from) > 0 then
-    print('init model from', opt.init_from)
-    local checkpoint = torch.load(opt.init_from)
-    params:copy(checkpoint.params)
-    --encoderDecoder = checkpoint.encoderDecoder
-    --setmetatable(encoderDecoder, EncDec)
-end
-
-
 local iterations = opt.epochs * loader.numBatches
-local iterationsPerEpoch = loader.numBatches
-
 trainLosses = {}
 print('start training...')
 for i = 1, iterations do
@@ -101,9 +85,9 @@ for i = 1, iterations do
     local epoch = i / loader.numBatches
     local timer = torch.Timer()
 
-    local encInSeq, decInSeq, decOutSeq, ylen = loader:nextBatch()
+    local encInSeq, encInSeqRev, decInSeq, decOutSeq, ylen = loader:nextBatch()
     if opt.gpuid >= 0 then
-        encInSeq = encInSeq:cuda()
+        encInSeqRev = encInSeqRev:cuda()
         decInSeq = decInSeq:cuda()
         decOutSeq = decOutSeq:cuda()
     end
@@ -114,17 +98,20 @@ for i = 1, iterations do
 
         gradParams:zero()
         -- forward
-        local decOut = encoderDecoder:forward(encInSeq, decInSeq)
+        local decOut = encoderDecoder:forward(encInSeqRev, decInSeq)
 
         -- print prediction
         if i % opt.print_sent_every == 0 then
-            local sent, sentlen = seqtosent(decOutSeq[1], id2wd)
-            print(sent)
-            for j =1, sentlen do
-                local _, wd = torch.max(decOut[j][1], 1)
-                io.write(id2wd[wd[1]] .. ' ')
+            for j = 1, decOutSeq:size(1)  do
+                local sent, sentlen = seqtosent(decOutSeq[j], id2wd)
+                print(sent)
+                for step = 1, sentlen do
+                    local _, wd = torch.max(decOut[step][j], 1)
+                    io.write(id2wd[wd[1]] .. ' ')
+                end
+                io.write('\n')
+                print('--------')
             end
-            io.write('\n\n')
         end
 
         decOutSeq = toTable:forward(decOutSeq)
@@ -141,27 +128,28 @@ for i = 1, iterations do
 
         -- backward
         local gradOutput = criterion:backward(decOut, decOutSeq)
-        encoderDecoder:backward(encInSeq, decInSeq, gradOutput)
+        encoderDecoder:backward(encInSeqRev, decInSeq, gradOutput)
 
         return err, gradParams
     end
 
     local _, loss = optimMethod(feval, params, optimState)
+    encoderDecoder.enc:get(1).weight[1]:zero()
+    encoderDecoder.dec:get(1).weight[1]:zero()
 
     local time = timer:time().real
-    local trainLoss = loss[1]
+    local trainLoss = loss[1] / (math.ceil(torch.mean(ylen)))
     trainLosses[i] = trainLoss
 
     if i % opt.save_every == 0 or i % loader.numBatches == 0 or i == iterations then
         local savefile = string.format('%s/%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, trainLoss)
         print('iter ', i, 'save checkpoint', savefile)
-        -- cleanupModel(model)
         model:clearState()
         local checkpoint = {}
         -- checkpoint.encoderDecoder = encoderDecoder
         checkpoint.params = params -- only save params for low storage
         checkpoint.opt = opt
-        checkpoint.trainLosses = trainLosses
+        -- checkpoint.trainLosses = trainLosses
         checkpoint.i = i
         checkpoint.epoch = epoch
         torch.save(savefile, checkpoint)
