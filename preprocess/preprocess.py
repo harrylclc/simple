@@ -4,6 +4,7 @@ import os
 import operator
 import h5py
 import re
+import math
 
 FILE_PATHS = {'newsela': '/data/home/cul226/simple/sents/newsela.sents',
               'acl': '/data/home/cul226/simple/sents/acl.sents',
@@ -64,7 +65,8 @@ def load_data(dataset, train_path):
                 d.extend([1])   # EOS
                 sents_id.append(d)
             if len(sents_id[0]) > args.max_len or\
-               len(sents_id[1]) > args.max_len:
+               len(sents_id[1]) > args.max_len or\
+               len(sents_id[1]) > math.ceil(1.05*len(sents_id[0])):
                 continue
             data[2].append(len(sents_id[1]))
             sents_id[1].extend([1] * (max_y_len + 1 - len(sents_id[1])))
